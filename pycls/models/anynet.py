@@ -7,12 +7,11 @@
 
 """AnyNet models."""
 
-import torch.nn as nn
-
-from pycls.core.config import cfg
-
 import pycls.utils.logging as lu
 import pycls.utils.net as nu
+import torch.nn as nn
+from pycls.core.config import cfg
+
 
 logger = lu.get_logger(__name__)
 
@@ -20,25 +19,49 @@ logger = lu.get_logger(__name__)
 def get_stem_fun(stem_type):
     """Retrives the stem function by name."""
     stem_funs = {
-        'res_stem_cifar': ResStemCifar,
-        'res_stem_in': ResStemIN,
-        'simple_stem_in': SimpleStemIN,
+        "res_stem_cifar": ResStemCifar,
+        "res_stem_in": ResStemIN,
+        "simple_stem_in": SimpleStemIN,
     }
-    assert stem_type in stem_funs.keys(), \
-        'Stem type \'{}\' not supported'.format(stem_type)
+    assert stem_type in stem_funs.keys(), "Stem type '{}' not supported".format(
+        stem_type
+    )
     return stem_funs[stem_type]
 
 
 def get_block_fun(block_type):
     """Retrieves the block function by name."""
     block_funs = {
-        'vanilla_block': VanillaBlock,
-        'res_basic_block': ResBasicBlock,
-        'res_bottleneck_block': ResBottleneckBlock,
+        "vanilla_block": VanillaBlock,
+        "res_basic_block": ResBasicBlock,
+        "res_bottleneck_block": ResBottleneckBlock,
     }
-    assert block_type in block_funs.keys(), \
-        'Block type \'{}\' not supported'.format(block_type)
+    assert block_type in block_funs.keys(), "Block type '{}' not supported".format(
+        block_type
+    )
     return block_funs[block_type]
+
+
+class SE(nn.Module):
+    """Squeeze-and-Excitation (SE) block"""
+
+    def __init__(self, dim_in, dim_se):
+        super(SE, self).__init__()
+        self._construct(dim_in, dim_se)
+
+    def _construct(self, dim_in, dim_se):
+        # AvgPool
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        # FC, Activation, FC, Sigmoid
+        self.f_ex = nn.Sequential(
+            nn.Conv2d(dim_in, dim_se, kernel_size=1, bias=True),
+            nn.ReLU(inplace=cfg.MEM.RELU_INPLACE),
+            nn.Conv2d(dim_se, dim_in, kernel_size=1, bias=True),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        return x * self.f_ex(self.avg_pool(x))
 
 
 class AnyHead(nn.Module):
@@ -60,24 +83,21 @@ class VanillaBlock(nn.Module):
     """Vanilla block: [3x3 conv, BN, Relu] x2"""
 
     def __init__(self, w_in, w_out, stride, bm=None, g=None):
-        assert bm is None and g is None, \
-            'Vanilla block does not support bm and g options'
+        assert (
+            bm is None and g is None
+        ), "Vanilla block does not support bm and g options"
         super(VanillaBlock, self).__init__()
         self._construct(w_in, w_out, stride)
 
     def _construct(self, w_in, w_out, stride):
         # 3x3, BN, ReLU
         self.a = nn.Conv2d(
-            w_in, w_out, kernel_size=3,
-            stride=stride, padding=1, bias=False
+            w_in, w_out, kernel_size=3, stride=stride, padding=1, bias=False
         )
         self.a_bn = nn.BatchNorm2d(w_out, eps=cfg.BN.EPS, momentum=cfg.BN.MOM)
         self.a_relu = nn.ReLU(inplace=cfg.MEM.RELU_INPLACE)
         # 3x3, BN, ReLU
-        self.b = nn.Conv2d(
-            w_out, w_out, kernel_size=3,
-            stride=1, padding=1, bias=False
-        )
+        self.b = nn.Conv2d(w_out, w_out, kernel_size=3, stride=1, padding=1, bias=False)
         self.b_bn = nn.BatchNorm2d(w_out, eps=cfg.BN.EPS, momentum=cfg.BN.MOM)
         self.b_relu = nn.ReLU(inplace=cfg.MEM.RELU_INPLACE)
 
@@ -97,16 +117,12 @@ class BasicTransform(nn.Module):
     def _construct(self, w_in, w_out, stride):
         # 3x3, BN, ReLU
         self.a = nn.Conv2d(
-            w_in, w_out, kernel_size=3,
-            stride=stride, padding=1, bias=False
+            w_in, w_out, kernel_size=3, stride=stride, padding=1, bias=False
         )
         self.a_bn = nn.BatchNorm2d(w_out, eps=cfg.BN.EPS, momentum=cfg.BN.MOM)
         self.a_relu = nn.ReLU(inplace=cfg.MEM.RELU_INPLACE)
         # 3x3, BN
-        self.b = nn.Conv2d(
-            w_out, w_out, kernel_size=3,
-            stride=1, padding=1, bias=False
-        )
+        self.b = nn.Conv2d(w_out, w_out, kernel_size=3, stride=1, padding=1, bias=False)
         self.b_bn = nn.BatchNorm2d(w_out, eps=cfg.BN.EPS, momentum=cfg.BN.MOM)
         self.b_bn.final_bn = True
 
@@ -120,15 +136,15 @@ class ResBasicBlock(nn.Module):
     """Residual basic block: x + F(x), F = basic transform"""
 
     def __init__(self, w_in, w_out, stride, bm=None, g=None):
-        assert bm is None and g is None, \
-            'Basic transform does not support bm and g options'
+        assert (
+            bm is None and g is None
+        ), "Basic transform does not support bm and g options"
         super(ResBasicBlock, self).__init__()
         self._construct(w_in, w_out, stride)
 
     def _add_skip_proj(self, w_in, w_out, stride):
         self.proj = nn.Conv2d(
-            w_in, w_out, kernel_size=1,
-            stride=stride, padding=0, bias=False
+            w_in, w_out, kernel_size=1, stride=stride, padding=0, bias=False
         )
         self.bn = nn.BatchNorm2d(w_out, eps=cfg.BN.EPS, momentum=cfg.BN.MOM)
 
@@ -162,27 +178,23 @@ class BottleneckTransform(nn.Module):
         # Compute the number of groups
         num_gs = w_b // g if cfg.ANYNET.GW_PARAM else g
         # 1x1, BN, ReLU
-        self.a = nn.Conv2d(
-            w_in, w_b, kernel_size=1,
-            stride=1, padding=0, bias=False
-        )
-        self.a_bn = nn.BatchNorm2d(
-            w_b, eps=cfg.BN.EPS, momentum=cfg.BN.MOM)
+        self.a = nn.Conv2d(w_in, w_b, kernel_size=1, stride=1, padding=0, bias=False)
+        self.a_bn = nn.BatchNorm2d(w_b, eps=cfg.BN.EPS, momentum=cfg.BN.MOM)
         self.a_relu = nn.ReLU(inplace=cfg.MEM.RELU_INPLACE)
         # 3x3, BN, ReLU
         self.b = nn.Conv2d(
-            w_b, w_b, kernel_size=3,
-            stride=stride, padding=1, groups=num_gs, bias=False
+            w_b, w_b, kernel_size=3, stride=stride, padding=1, groups=num_gs, bias=False
         )
-        self.b_bn = nn.BatchNorm2d(
-            w_b, eps=cfg.BN.EPS, momentum=cfg.BN.MOM
-        )
+        self.b_bn = nn.BatchNorm2d(w_b, eps=cfg.BN.EPS, momentum=cfg.BN.MOM)
         self.b_relu = nn.ReLU(inplace=cfg.MEM.RELU_INPLACE)
+
+        if cfg.ANYNET.SE_ENABLED:
+            se_r = cfg.ANYNET.SE_RATIO
+            dim_se = int(round(w_in * se_r))
+            self.se = SE(w_b, dim_se)
+
         # 1x1, BN
-        self.c = nn.Conv2d(
-            w_b, w_out, kernel_size=1,
-            stride=1, padding=0, bias=False
-        )
+        self.c = nn.Conv2d(w_b, w_out, kernel_size=1, stride=1, padding=0, bias=False)
         self.c_bn = nn.BatchNorm2d(w_out, eps=cfg.BN.EPS, momentum=cfg.BN.MOM)
         self.c_bn.final_bn = True
 
@@ -201,8 +213,7 @@ class ResBottleneckBlock(nn.Module):
 
     def _add_skip_proj(self, w_in, w_out, stride):
         self.proj = nn.Conv2d(
-            w_in, w_out, kernel_size=1,
-            stride=stride, padding=0, bias=False
+            w_in, w_out, kernel_size=1, stride=stride, padding=0, bias=False
         )
         self.bn = nn.BatchNorm2d(w_out, eps=cfg.BN.EPS, momentum=cfg.BN.MOM)
 
@@ -233,8 +244,7 @@ class ResStemCifar(nn.Module):
     def _construct(self, w_in, w_out):
         # 3x3, BN, ReLU
         self.conv = nn.Conv2d(
-            w_in, w_out, kernel_size=3,
-            stride=1, padding=1, bias=False
+            w_in, w_out, kernel_size=3, stride=1, padding=1, bias=False
         )
         self.bn = nn.BatchNorm2d(w_out, eps=cfg.BN.EPS, momentum=cfg.BN.MOM)
         self.relu = nn.ReLU(cfg.MEM.RELU_INPLACE)
@@ -255,8 +265,7 @@ class ResStemIN(nn.Module):
     def _construct(self, w_in, w_out):
         # 7x7, BN, ReLU, maxpool
         self.conv = nn.Conv2d(
-            w_in, w_out, kernel_size=7,
-            stride=2, padding=3, bias=False
+            w_in, w_out, kernel_size=7, stride=2, padding=3, bias=False
         )
         self.bn = nn.BatchNorm2d(w_out, eps=cfg.BN.EPS, momentum=cfg.BN.MOM)
         self.relu = nn.ReLU(cfg.MEM.RELU_INPLACE)
@@ -278,8 +287,7 @@ class SimpleStemIN(nn.Module):
     def _construct(self, in_w, out_w):
         # 3x3, BN, ReLU
         self.conv = nn.Conv2d(
-            in_w, out_w, kernel_size=3,
-            stride=2, padding=1, bias=False
+            in_w, out_w, kernel_size=3, stride=2, padding=1, bias=False
         )
         self.bn = nn.BatchNorm2d(out_w, eps=cfg.BN.EPS, momentum=cfg.BN.MOM)
         self.relu = nn.ReLU(cfg.MEM.RELU_INPLACE)
@@ -305,8 +313,7 @@ class AnyStage(nn.Module):
             b_w_in = w_in if i == 0 else w_out
             # Construct the block
             self.add_module(
-                'b{}'.format(i + 1),
-                block_fun(b_w_in, w_out, b_stride, bm, g)
+                "b{}".format(i + 1), block_fun(b_w_in, w_out, b_stride, bm, g)
             )
 
     def forward(self, x):
@@ -319,10 +326,12 @@ class AnyNet(nn.Module):
     """AnyNet model."""
 
     def __init__(self):
-        assert len(cfg.ANYNET.DEPTHS) == len(cfg.ANYNET.WIDTHS), \
-            'Depths and widths must be specified for each stage'
-        assert len(cfg.ANYNET.DEPTHS) == len(cfg.ANYNET.STRIDES), \
-            'Depths and strides must be specified for each stage'
+        assert len(cfg.ANYNET.DEPTHS) == len(
+            cfg.ANYNET.WIDTHS
+        ), "Depths and widths must be specified for each stage"
+        assert len(cfg.ANYNET.DEPTHS) == len(
+            cfg.ANYNET.STRIDES
+        ), "Depths and strides must be specified for each stage"
         super(AnyNet, self).__init__()
         self._construct(
             stem_type=cfg.ANYNET.STEM_TYPE,
@@ -333,7 +342,7 @@ class AnyNet(nn.Module):
             ss=cfg.ANYNET.STRIDES,
             bms=cfg.ANYNET.BOT_MULS,
             gs=cfg.ANYNET.GROUPS,
-            nc=cfg.MODEL.NUM_CLASSES
+            nc=cfg.MODEL.NUM_CLASSES,
         )
         self.apply(nu.init_weights)
 
@@ -343,7 +352,7 @@ class AnyNet(nn.Module):
         gs = gs if gs else [1 for _d in ds]
         # Group params by stage
         stage_params = list(zip(ds, ws, ss, bms, gs))
-        logger.info('Constructing: AnyNet-{}'.format(stage_params))
+        logger.info("Constructing: AnyNet-{}".format(stage_params))
         # Construct the stem
         stem_fun = get_stem_fun(stem_type)
         self.stem = stem_fun(3, stem_w)
@@ -352,8 +361,7 @@ class AnyNet(nn.Module):
         prev_w = stem_w
         for i, (d, w, s, bm, g) in enumerate(stage_params):
             self.add_module(
-                's{}'.format(i + 1),
-                AnyStage(prev_w, w, s, d, block_fun, bm, g)
+                "s{}".format(i + 1), AnyStage(prev_w, w, s, d, block_fun, bm, g)
             )
             prev_w = w
         # Construct the head
